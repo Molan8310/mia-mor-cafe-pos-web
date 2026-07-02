@@ -1,0 +1,714 @@
+const API_DEFAULT = location.protocol.startsWith("http") ? `${location.origin}/api` : "http://localhost:4100/api";
+const POS_MODULES = [
+  ["dashboard", "Dashboard"],
+  ["pos", "Punto de venta"],
+  ["clients", "Clientes"],
+  ["users", "Alta de usuarios"],
+  ["products", "Productos"],
+  ["sales", "Ventas"],
+  ["sync", "Sincronizacion"],
+  ["audit", "Auditoria"]
+];
+const PLATFORM_MODULES = [
+  ["platformDashboard", "Dashboard matriz"],
+  ["platformCustomers", "Negocios / licencias"],
+  ["platformUsers", "Alta de usuarios"],
+  ["platformPlans", "Planes"],
+  ["platformSync", "Sincronizacion global"],
+  ["platformAudit", "Auditoria matriz"]
+];
+const CLIENT_ATTRIBUTES = [
+  ["active", "Activo"],
+  ["frequent", "Frecuente"],
+  ["credit", "Credito autorizado"],
+  ["whatsapp", "WhatsApp/promos"],
+  ["invoice", "Factura"],
+  ["wholesale", "Mayoreo"]
+];
+const ROLE_DEFAULT_PERMISSIONS = {
+  SUPER_ADMIN: PLATFORM_MODULES.map(([key]) => key),
+  ADMINISTRADOR: ["dashboard", "pos", "clients", "products", "sales", "sync", "audit"],
+  CAJERO: ["dashboard", "pos", "clients", "sales", "sync"],
+  INVENTARIO: ["dashboard", "products", "sync"],
+  REPORTES: ["dashboard", "sales", "sync", "audit"]
+};
+
+const state = {
+  api: API_DEFAULT,
+  token: localStorage.getItem("mia_saas_token") || "",
+  user: JSON.parse(localStorage.getItem("mia_saas_user") || "null"),
+  clients: [],
+  companyUsers: [],
+  products: [],
+  sales: [],
+  audit: [],
+  cart: [],
+  platform: { summary: {}, customers: [], licenses: [], users: [], plans: [], audit: [], sync: {} },
+  lastCredentials: null,
+  view: localStorage.getItem("mia_saas_view") || "dashboard",
+  sequence: Number(localStorage.getItem("mia_saas_sequence") || 0),
+  pending: JSON.parse(localStorage.getItem("mia_saas_pending") || "[]")
+};
+
+const money = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
+const app = document.querySelector("#app");
+const toastNode = document.querySelector("#toast");
+
+function toast(message) {
+  toastNode.textContent = message;
+  toastNode.classList.add("show");
+  setTimeout(() => toastNode.classList.remove("show"), 2600);
+}
+
+function isPlatform() {
+  return state.user?.role === "SUPER_ADMIN";
+}
+
+function permissions() {
+  return Array.isArray(state.user?.permissions) && state.user.permissions.length
+    ? state.user.permissions
+    : ROLE_DEFAULT_PERMISSIONS[state.user?.role] || [];
+}
+
+function can(view) {
+  return isPlatform() ? PLATFORM_MODULES.some(([key]) => key === view) : permissions().includes(view);
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(`${state.api}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
+      ...(state.user?.companyId ? { "X-Company-Id": state.user.companyId } : {}),
+      ...(options.headers || {})
+    }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Error de API");
+  return data;
+}
+
+function saveSession() {
+  localStorage.setItem("mia_saas_token", state.token);
+  localStorage.setItem("mia_saas_user", JSON.stringify(state.user));
+  localStorage.setItem("mia_saas_sequence", String(state.sequence));
+  localStorage.setItem("mia_saas_pending", JSON.stringify(state.pending));
+  localStorage.setItem("mia_saas_view", state.view);
+}
+
+function render() {
+  if (!state.token) return renderLogin();
+  if (isPlatform() && !state.view.startsWith("platform")) state.view = "platformDashboard";
+  if (!isPlatform() && state.view.startsWith("platform")) state.view = "dashboard";
+  if (!isPlatform() && !can(state.view)) state.view = permissions()[0] || "dashboard";
+  saveSession();
+
+  app.innerHTML = `
+    <main class="app-shell ${isPlatform() ? "platform-shell" : ""}">
+      <aside class="sidebar">
+        <div class="brand"><img src="assets/logo-ui.png" alt="Mía Mor Café" /><div><strong>Mía Mor Café</strong></div></div>
+        <nav class="nav">${navItems()}</nav>
+        <div class="sync-box">
+          <div class="user-summary">
+            <strong>${state.user?.name || "Usuario"}</strong>
+            <span>${state.user?.role || ""}</span>
+            <small>${isPlatform() ? "Control comercial central" : `Pendientes offline: ${state.pending.length}`}</small>
+          </div>
+          <div class="sidebar-actions">
+            <button class="secondary" data-sync>Sincronizar</button>
+            <button class="ghost" data-logout>Cerrar sesion</button>
+          </div>
+        </div>
+      </aside>
+      <section class="main">
+        <header class="topbar"><h2>${title()}</h2></header>
+        <section class="content">${view()}</section>
+      </section>
+    </main>
+  `;
+}
+
+function renderLogin() {
+  app.innerHTML = `
+    <main class="login-shell">
+      <section class="login-hero">
+        <div><img src="assets/logo-ui.png" alt="Mía Mor Café" /><h1>Mía Mor Café</h1><p>Sistema comercial para punto de venta, clientes sincronizados, inventario, cancelaciones, licencias, permisos por modulo y auditoria.</p></div>
+        <p>El administrador licenciante crea clientes, licencias y usuarios. Cada negocio entra con su propia cuenta y permisos.</p>
+      </section>
+      <section class="login-card">
+        <h2>Ingresar al sistema</h2>
+        <form id="loginForm" class="stack">
+          <label class="field">Correo<input name="email" autocomplete="username" /></label>
+          <label class="field">Contrasena<input name="password" type="password" autocomplete="current-password" /></label>
+          <button class="primary">Entrar</button>
+        </form>
+      </section>
+    </main>
+  `;
+}
+
+function navItems() {
+  const list = isPlatform() ? PLATFORM_MODULES : POS_MODULES.filter(([key]) => can(key));
+  return list.map(([key, label]) => nav(key, label)).join("");
+}
+
+function nav(view, label) {
+  return `<button class="${state.view === view ? "active" : ""}" data-view="${view}">${label}</button>`;
+}
+
+function title() {
+  return {
+    dashboard: "Dashboard",
+    pos: "Punto de venta",
+    clients: "Clientes sincronizados",
+    users: "Alta de usuarios",
+    products: "Productos / inventario",
+    sales: "Ventas y cancelaciones",
+    sync: "Sincronizacion",
+    audit: "Auditoria",
+    platformDashboard: "Dashboard matriz",
+    platformCustomers: "Negocios / licencias",
+    platformUsers: "Alta de usuarios",
+    platformPlans: "Planes comerciales",
+    platformSync: "Sincronizacion global",
+    platformAudit: "Auditoria matriz"
+  }[state.view] || "Dashboard";
+}
+
+function view() {
+  if (state.view === "platformDashboard") return platformDashboardView();
+  if (state.view === "platformCustomers") return platformCustomersView();
+  if (state.view === "platformUsers") return platformUsersView();
+  if (state.view === "platformPlans") return platformPlansView();
+  if (state.view === "platformSync") return platformSyncView();
+  if (state.view === "platformAudit") return platformAuditView();
+  if (state.view === "pos") return posView();
+  if (state.view === "clients") return clientsView();
+  if (state.view === "users") return companyUsersView();
+  if (state.view === "products") return productsView();
+  if (state.view === "sales") return salesView();
+  if (state.view === "sync") return syncView();
+  if (state.view === "audit") return auditView();
+  return dashboardView();
+}
+
+function dashboardView() {
+  const validSales = state.sales.filter((sale) => sale.status !== "CANCELLED");
+  return `
+    <div class="cards">
+      <article class="card"><span>Clientes</span><strong>${state.clients.length}</strong></article>
+      <article class="card"><span>Productos</span><strong>${state.products.length}</strong></article>
+      <article class="card"><span>Ventas validas</span><strong>${validSales.length}</strong></article>
+      <article class="card"><span>Ingresos</span><strong>${money.format(validSales.reduce((s, v) => s + v.total, 0))}</strong></article>
+    </div>
+    <div class="panel" style="margin-top:16px"><div class="panel-head"><h3>Estado comercial del cliente</h3><span class="muted">Secuencia ${state.sequence}</span></div><p>Clientes, ventas, inventario, cancelaciones y auditoria se sincronizan con la API central.</p></div>
+  `;
+}
+
+function platformDashboardView() {
+  const s = state.platform.summary || {};
+  return `
+    <div class="cards">
+      <article class="card"><span>Clientes activos</span><strong>${s.companies || 0}</strong></article>
+      <article class="card"><span>Licencias activas</span><strong>${s.activeLicenses || 0}</strong></article>
+      <article class="card"><span>Usuarios</span><strong>${s.users || 0}</strong></article>
+      <article class="card"><span>Ventas sincronizadas</span><strong>${money.format(s.income || 0)}</strong></article>
+    </div>
+    <div class="panel" style="margin-top:16px"><div class="panel-head"><h3>Estructura recomendada</h3><span class="muted">Secuencia ${s.sequence || state.sequence}</span></div><p>Tu cuenta administra negocios, licencias y usuarios de acceso. Cada usuario entra con correo, contrasena y permisos propios; dentro del POS, el modulo Clientes corresponde a compradores del negocio.</p></div>
+  `;
+}
+
+function platformCustomersView() {
+  return `
+    <div class="panel">
+      <div class="panel-head"><h3>Agregar negocio y licencia</h3><span class="muted">Alta comercial desde administrador licenciante</span></div>
+      <form id="platformCustomerForm" class="grid-form">
+        <input name="companyName" placeholder="Nombre del negocio" required />
+        <input name="ownerName" placeholder="Nombre del propietario" />
+        <input name="phone" placeholder="Telefono" />
+        <input name="adminName" placeholder="Nombre del usuario administrador" required />
+        <input name="adminEmail" type="email" placeholder="Correo de acceso del usuario" required />
+        <input name="adminPassword" placeholder="Contrasena inicial o dejar vacio para generar" />
+        <select name="planId">${state.platform.plans.map((plan) => `<option value="${plan.id}">${plan.name} - ${money.format(plan.price)}</option>`).join("")}</select>
+        <input name="licenseKey" placeholder="Licencia automatica si se deja vacio" />
+        <label><input type="checkbox" name="modules" value="dashboard" checked /> Dashboard</label>
+        <label><input type="checkbox" name="modules" value="pos" checked /> Punto de venta</label>
+        <label><input type="checkbox" name="modules" value="clients" checked /> Clientes</label>
+        <label><input type="checkbox" name="modules" value="users" checked /> Alta de usuarios</label>
+        <label><input type="checkbox" name="modules" value="products" checked /> Productos</label>
+        <label><input type="checkbox" name="modules" value="sales" checked /> Ventas</label>
+        <label><input type="checkbox" name="modules" value="sync" checked /> Sincronizacion</label>
+        <label><input type="checkbox" name="modules" value="audit" checked /> Auditoria</label>
+        <button class="primary">Crear negocio y usuario</button>
+      </form>
+    </div>
+    ${credentialsPanel()}
+    <div class="panel" style="margin-top:16px">
+      <div class="table-wrap"><table><thead><tr><th>Negocio</th><th>Plan</th><th>Licencia</th><th>Usuarios</th><th>Datos</th><th>Acciones</th></tr></thead><tbody>
+        ${state.platform.customers.map((c) => `<tr><td><strong>${c.name}</strong><br><small>${c.email || "-"}</small></td><td>${c.plan}</td><td>${c.license?.key || c.license || "-"}</td><td>${c.users?.length || 0}</td><td>${c.totals?.clients || 0} clientes · ${c.totals?.sales || 0} ventas</td><td><div class="actions"><button class="ghost" data-edit-customer="${c.id}">Modificar</button><button class="danger" data-delete-customer="${c.id}">Cancelar</button></div></td></tr>`).join("")}
+      </tbody></table></div>
+    </div>
+  `;
+}
+
+function platformUsersView() {
+  return `
+    <div class="panel">
+      <div class="panel-head"><h3>Alta de usuario de acceso</h3><span class="muted">Correo, contrasena y modulos permitidos</span></div>
+      <form id="platformUserForm" class="grid-form">
+        <select name="companyId" required>${state.platform.customers.map((c) => `<option value="${c.id}">${c.name}</option>`).join("")}</select>
+        <input name="name" placeholder="Nombre" required />
+        <input name="email" type="email" placeholder="Correo" required />
+        <input name="password" placeholder="Contrasena inicial o dejar vacio para generar" />
+        <select name="role"><option>CAJERO</option><option>INVENTARIO</option><option>REPORTES</option><option>ADMINISTRADOR</option></select>
+        ${POS_MODULES.map(([value, label]) => `<label><input type="checkbox" name="permissions" value="${value}" checked /> ${label}</label>`).join("")}
+        <button class="primary">Crear usuario</button>
+      </form>
+    </div>
+    ${credentialsPanel()}
+    <div class="panel" style="margin-top:16px"><div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Empresa</th><th>Rol</th><th>Permisos</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${state.platform.users.map((u) => `<tr><td>${u.name}<br><small>${u.email}</small></td><td>${u.company}</td><td>${u.role}</td><td>${(u.permissions || []).join(", ")}</td><td>${u.active ? "Activo" : "Inactivo"}</td><td><div class="actions">${u.role === "SUPER_ADMIN" ? "" : `<button class="ghost" data-edit-user="${u.id}">Modificar</button><button class="danger" data-delete-user="${u.id}">Desactivar</button>`}</div></td></tr>`).join("")}</tbody></table></div></div>
+  `;
+}
+
+function companyUsersView() {
+  return `
+    <div class="panel">
+      <div class="panel-head"><h3>Alta de usuario del punto de venta</h3><span class="muted">Acceso por rol y modulos</span></div>
+      <form id="companyUserForm" class="grid-form">
+        <input name="name" placeholder="Nombre del usuario" required />
+        <input name="email" type="email" placeholder="Correo de acceso" required />
+        <input name="password" placeholder="Contrasena inicial o dejar vacio para generar" />
+        <select name="role"><option>CAJERO</option><option>INVENTARIO</option><option>REPORTES</option><option>ADMINISTRADOR</option></select>
+        ${POS_MODULES.filter(([value]) => value !== "users").map(([value, label]) => `<label><input type="checkbox" name="permissions" value="${value}" checked /> ${label}</label>`).join("")}
+        <button class="primary">Crear usuario</button>
+      </form>
+    </div>
+    ${credentialsPanel()}
+    <div class="panel" style="margin-top:16px">
+      <div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Correo</th><th>Rol</th><th>Permisos</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>
+        ${state.companyUsers.map((u) => `<tr><td>${u.name}</td><td>${u.email}</td><td>${u.role}</td><td>${(u.permissions || []).join(", ")}</td><td>${u.active ? "Activo" : "Inactivo"}</td><td><div class="actions">${u.id === state.user?.id ? "" : `<button class="ghost" data-edit-company-user="${u.id}">Modificar</button><button class="danger" data-delete-company-user="${u.id}">Desactivar</button>`}</div></td></tr>`).join("")}
+      </tbody></table></div>
+    </div>
+  `;
+}
+
+function credentialsPanel() {
+  if (!state.lastCredentials) return "";
+  return `<div class="panel credential-panel" style="margin-top:16px"><div class="panel-head"><h3>Acceso generado</h3><span class="muted">Entregar al usuario</span></div><div class="rows"><div class="row"><strong>Negocio</strong><span>${state.lastCredentials.company || "-"}</span></div><div class="row"><strong>Usuario</strong><span>${state.lastCredentials.name || "-"}</span></div><div class="row"><strong>Correo</strong><span>${state.lastCredentials.email}</span></div><div class="row"><strong>Contrasena temporal</strong><span>${state.lastCredentials.password}</span></div><div class="row"><strong>Licencia</strong><span>${state.lastCredentials.license || "-"}</span></div></div></div>`;
+}
+
+function platformPlansView() {
+  return `<div class="panel"><div class="table-wrap"><table><thead><tr><th>Plan</th><th>Duracion</th><th>Precio</th><th>Usuarios</th><th>Sucursales</th></tr></thead><tbody>${state.platform.plans.map((p) => `<tr><td>${p.name}</td><td>${p.permanent ? "Permanente" : `${p.durationDays} dias`}</td><td>${money.format(p.price)}</td><td>${p.maxUsers}</td><td>${p.maxBranches}</td></tr>`).join("")}</tbody></table></div></div>`;
+}
+
+function platformSyncView() {
+  const sync = state.platform.sync || {};
+  return `<div class="panel"><h3>Sincronizacion global</h3><p>Secuencia central: ${sync.sequence || state.sequence}</p><p>Empresas registradas: ${sync.companies || 0}</p><p>Usuarios registrados: ${sync.users || 0}</p><button class="primary" data-sync>Actualizar estado global</button></div>`;
+}
+
+function platformAuditView() {
+  return `<div class="panel"><div class="rows">${state.platform.audit.map((a) => `<div class="row"><strong>${a.action}</strong><small>${new Date(a.createdAt).toLocaleString("es-MX")}</small></div>`).join("") || `<div class="row">Sin auditoria cargada</div>`}</div></div>`;
+}
+
+function posView() {
+  const total = state.cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+  return `
+    <div class="pos-layout">
+      <section class="panel">
+        <div class="panel-head"><h3>Productos</h3><button class="ghost" data-refresh>Actualizar</button></div>
+        <div class="products">${state.products.map((p) => `<button class="product" data-add="${p.id}" ${p.stock <= 0 ? "disabled" : ""}><strong>${p.name}</strong><small>${p.category} · Stock ${p.stock}</small><span class="price">${money.format(p.price)}</span></button>`).join("")}</div>
+      </section>
+      <aside class="panel cart">
+        <div class="panel-head"><h3>Carrito</h3><button class="ghost" data-clear>Limpiar</button></div>
+        <label class="field">Cliente<select id="saleClient">${state.clients.map((c) => `<option value="${c.id}">${c.name}</option>`).join("")}</select></label>
+        <label class="field">Pago<select id="saleMethod"><option>Efectivo</option><option>Tarjeta</option><option>Transferencia</option><option>Mixto</option></select></label>
+        <div class="rows" style="margin-top:12px">${state.cart.map((item) => `<div class="row"><div><strong>${item.name}</strong><small>${item.qty} x ${money.format(item.price)}</small></div><div class="actions"><button class="ghost" data-dec="${item.id}">-</button><button class="ghost" data-inc="${item.id}">+</button></div></div>`).join("") || `<div class="row"><span class="muted">Carrito vacio</span></div>`}</div>
+        <div class="total"><span>Total</span><span>${money.format(total)}</span></div>
+        <button class="primary" data-checkout ${state.cart.length ? "" : "disabled"} style="width:100%;margin-top:12px">Cobrar venta</button>
+      </aside>
+    </div>
+  `;
+}
+
+function clientsView() {
+  return `
+    <div class="panel">
+      <div class="panel-head"><h3>Nuevo cliente del negocio</h3></div>
+      <form id="clientForm" class="client-form">
+        <input name="name" placeholder="Nombre" required />
+        <input name="phone" placeholder="Telefono" />
+        <input name="email" placeholder="Correo" />
+        <div class="check-grid">
+          ${CLIENT_ATTRIBUTES.map(([value, label]) => `<label><input type="checkbox" name="attributes" value="${value}" ${value === "active" ? "checked" : ""} /> ${label}</label>`).join("")}
+        </div>
+        <button class="primary">Guardar cliente</button>
+      </form>
+    </div>
+    <div class="panel" style="margin-top:16px"><div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Telefono</th><th>Correo</th><th>Atributos</th><th>Sync</th><th>Acciones</th></tr></thead><tbody>${state.clients.map((c) => `<tr><td>${c.name}</td><td>${c.phone || "-"}</td><td>${c.email || "-"}</td><td>${attributeBadges(c.attributes)}</td><td>${c.syncedAt ? "Sincronizado" : "Pendiente"}</td><td>${clientActions(c)}</td></tr>`).join("")}</tbody></table></div></div>
+  `;
+}
+
+function isCounterClient(client) {
+  const name = String(client?.name || "").trim().toLowerCase();
+  return name === "publico en general" || name === "cliente mostrador";
+}
+
+function clientActions(client) {
+  if (isCounterClient(client)) return `<span class="badge">Venta general</span>`;
+  return `<div class="actions"><button class="ghost" data-edit-client="${client.id}">Modificar</button><button class="danger" data-delete-client="${client.id}">Eliminar</button></div>`;
+}
+
+function productsView() {
+  return `<div class="panel"><div class="table-wrap"><table><thead><tr><th>Producto</th><th>Categoria</th><th>Precio</th><th>Stock</th><th>Vendidos</th></tr></thead><tbody>${state.products.map((p) => `<tr><td>${p.name}</td><td>${p.category}</td><td>${money.format(p.price)}</td><td>${p.stock}</td><td>${p.sold || 0}</td></tr>`).join("")}</tbody></table></div></div>`;
+}
+
+function salesView() {
+  return `<div class="panel"><div class="table-wrap"><table><thead><tr><th>Folio</th><th>Total</th><th>Estado</th><th>Cliente</th><th></th></tr></thead><tbody>${state.sales.map((s) => `<tr class="${s.status === "CANCELLED" ? "cancelled" : ""}"><td>${s.folio}</td><td>${money.format(s.total)}</td><td>${s.status}</td><td>${clientName(s.clientId)}</td><td>${s.status === "CANCELLED" ? "" : `<button class="danger" data-cancel="${s.id}">Cancelar</button>`}</td></tr>`).join("")}</tbody></table></div></div>`;
+}
+
+function syncView() {
+  return `<div class="panel"><h3>Sincronizacion</h3><p>Secuencia local: ${state.sequence}</p><p>Cambios offline pendientes: ${state.pending.length}</p><div class="actions"><button class="primary" data-sync>Enviar/recibir cambios</button><button class="ghost" data-export>Exportar snapshot</button></div></div>`;
+}
+
+function auditView() {
+  return `<div class="panel"><div class="rows">${state.audit.map((a) => `<div class="row"><strong>${a.action}</strong><small>${new Date(a.createdAt).toLocaleString("es-MX")}</small></div>`).join("") || `<div class="row">Sin auditoria cargada</div>`}</div></div>`;
+}
+
+function clientName(id) {
+  return state.clients.find((c) => c.id === id)?.name || "Publico en General";
+}
+
+function collectClientAttributes(form) {
+  const values = new FormData(form).getAll("attributes");
+  return values.length ? values : ["active"];
+}
+
+function attributeBadges(attributes = []) {
+  const selected = Array.isArray(attributes) && attributes.length ? attributes : ["active"];
+  return `<div class="badges">${selected.map((value) => {
+    const label = CLIENT_ATTRIBUTES.find(([key]) => key === value)?.[1] || value;
+    return `<span class="badge">${label}</span>`;
+  }).join("")}</div>`;
+}
+
+async function loadAll() {
+  if (isPlatform()) return loadPlatform();
+  const endpoints = [
+    can("clients") ? api("/clients") : Promise.resolve([]),
+    can("users") ? api("/users") : Promise.resolve([]),
+    can("products") || can("pos") ? api("/products") : Promise.resolve([]),
+    can("sales") || can("pos") ? api("/sales") : Promise.resolve([]),
+    can("audit") ? api("/audit").catch(() => []) : Promise.resolve([]),
+    can("sync") ? api(`/sync/pull?since=${state.sequence}`).catch(() => ({ sequence: state.sequence })) : Promise.resolve({ sequence: state.sequence })
+  ];
+  const [clients, companyUsers, products, sales, audit, sync] = await Promise.all(endpoints);
+  state.clients = clients;
+  state.companyUsers = companyUsers;
+  state.products = products;
+  state.sales = sales;
+  state.audit = audit;
+  state.sequence = sync.sequence || state.sequence;
+  saveSession();
+  render();
+}
+
+async function loadPlatform() {
+  const [summary, customers, licenses, users, plans, audit, sync] = await Promise.all([
+    api("/platform/summary"),
+    api("/platform/customers"),
+    api("/platform/licenses"),
+    api("/platform/users"),
+    api("/platform/plans"),
+    api("/platform/audit"),
+    api("/platform/sync")
+  ]);
+  state.platform = { summary, customers, licenses, users, plans, audit, sync };
+  state.sequence = summary.sequence || state.sequence;
+  saveSession();
+  render();
+}
+
+async function syncPending() {
+  if (isPlatform()) {
+    await loadPlatform();
+    toast("Panel matriz sincronizado.");
+    return;
+  }
+  if (state.pending.length) {
+    const result = await api("/sync/push", { method: "POST", body: JSON.stringify({ changes: state.pending }) });
+    state.pending = [];
+    state.sequence = result.sequence || state.sequence;
+  }
+  await loadAll();
+  toast("Sincronizacion completa.");
+}
+
+document.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    if (event.target.id === "loginForm") {
+      const data = Object.fromEntries(new FormData(event.target));
+      const session = await api("/auth/login", { method: "POST", body: JSON.stringify({ email: data.email, password: data.password }) });
+      state.token = session.accessToken;
+      state.user = session.user;
+      state.view = session.user.role === "SUPER_ADMIN" ? "platformDashboard" : "dashboard";
+      saveSession();
+      await loadAll();
+      toast("Sesion iniciada.");
+    }
+    if (event.target.id === "platformCustomerForm") {
+      const form = new FormData(event.target);
+      const body = Object.fromEntries(form);
+      body.modules = form.getAll("modules");
+      const created = await api("/platform/customers", { method: "POST", body: JSON.stringify(body) });
+      state.lastCredentials = {
+        company: created.company?.name,
+        name: created.user?.name,
+        email: created.user?.email,
+        password: created.temporaryPassword || body.adminPassword,
+        license: created.license?.key
+      };
+      event.target.reset();
+      await loadPlatform();
+      toast("Negocio, licencia y usuario creados.");
+    }
+    if (event.target.id === "platformUserForm") {
+      const form = new FormData(event.target);
+      const body = Object.fromEntries(form);
+      body.permissions = form.getAll("permissions");
+      const created = await api("/platform/users", { method: "POST", body: JSON.stringify(body) });
+      state.lastCredentials = {
+        company: created.company,
+        name: created.name,
+        email: created.email,
+        password: created.temporaryPassword || body.password,
+        license: created.license
+      };
+      event.target.reset();
+      await loadPlatform();
+      toast("Usuario creado con acceso asignado.");
+    }
+    if (event.target.id === "companyUserForm") {
+      const form = new FormData(event.target);
+      const body = Object.fromEntries(form);
+      body.permissions = form.getAll("permissions");
+      const created = await api("/users", { method: "POST", body: JSON.stringify(body) });
+      state.lastCredentials = {
+        company: created.company,
+        name: created.name,
+        email: created.email,
+        password: created.temporaryPassword || body.password,
+        license: created.license
+      };
+      event.target.reset();
+      await loadAll();
+      toast("Usuario de punto de venta creado.");
+    }
+    if (event.target.id === "clientForm") {
+      const body = Object.fromEntries(new FormData(event.target));
+      body.attributes = collectClientAttributes(event.target);
+      if (!navigator.onLine) {
+        const offlineClient = { id: crypto.randomUUID(), ...body, points: 0, createdAt: new Date().toISOString() };
+        state.clients.unshift(offlineClient);
+        state.pending.push({ entity: "clients", action: "UPSERT", payload: offlineClient });
+        saveSession();
+        render();
+        toast("Cliente guardado offline. Se sincronizara despues.");
+        return;
+      }
+      await api("/clients", { method: "POST", body: JSON.stringify(body) });
+      event.target.reset();
+      await loadAll();
+      toast("Cliente sincronizado.");
+    }
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
+document.addEventListener("click", async (event) => {
+  try {
+    const viewButton = event.target.closest("[data-view]");
+    if (viewButton) {
+      state.view = viewButton.dataset.view;
+      render();
+    }
+    if (event.target.closest("[data-logout]")) {
+      state.token = "";
+      state.user = null;
+      state.view = "dashboard";
+      saveSession();
+      render();
+    }
+    if (event.target.closest("[data-refresh]")) await loadAll();
+    if (event.target.closest("[data-sync]")) await syncPending();
+    const editCustomer = event.target.closest("[data-edit-customer]");
+    if (editCustomer) {
+      const customer = state.platform.customers.find((item) => item.id === editCustomer.dataset.editCustomer);
+      if (!customer) return;
+      const companyName = prompt("Nombre del negocio", customer.name);
+      if (companyName === null) return;
+      const ownerName = prompt("Nombre del propietario", customer.ownerName || "");
+      if (ownerName === null) return;
+      const phone = prompt("Telefono", customer.phone || "");
+      if (phone === null) return;
+      await api(`/platform/customers/${customer.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ companyName, ownerName, phone })
+      });
+      await loadPlatform();
+      toast("Cliente/licencia actualizado.");
+    }
+    const deleteCustomer = event.target.closest("[data-delete-customer]");
+    if (deleteCustomer) {
+      const customer = state.platform.customers.find((item) => item.id === deleteCustomer.dataset.deleteCustomer);
+      if (!confirm(`Cancelar/dar de baja el cliente y licencia de ${customer?.name || "este cliente"}?`)) return;
+      await api(`/platform/customers/${deleteCustomer.dataset.deleteCustomer}`, { method: "DELETE" });
+      await loadPlatform();
+      toast("Cliente y licencia cancelados.");
+    }
+    const editClient = event.target.closest("[data-edit-client]");
+    if (editClient) {
+      const client = state.clients.find((item) => item.id === editClient.dataset.editClient);
+      if (!client) return;
+      const name = prompt("Nombre del cliente", client.name);
+      if (name === null) return;
+      const phone = prompt("Telefono", client.phone || "");
+      if (phone === null) return;
+      const email = prompt("Correo", client.email || "");
+      if (email === null) return;
+      const current = new Set(Array.isArray(client.attributes) && client.attributes.length ? client.attributes : ["active"]);
+      const attributes = CLIENT_ATTRIBUTES.filter(([, label]) => confirm(`Mantener atributo "${label}" para ${name}?`)).map(([value]) => value);
+      await api(`/clients/${client.id}`, { method: "PATCH", body: JSON.stringify({ name, phone, email, attributes: attributes.length ? attributes : Array.from(current) }) });
+      await loadAll();
+      toast("Cliente actualizado.");
+    }
+    const deleteClient = event.target.closest("[data-delete-client]");
+    if (deleteClient) {
+      const client = state.clients.find((item) => item.id === deleteClient.dataset.deleteClient);
+      if (!confirm(`Eliminar cliente ${client?.name || ""}?`)) return;
+      await api(`/clients/${deleteClient.dataset.deleteClient}`, { method: "DELETE" });
+      await loadAll();
+      toast("Cliente eliminado.");
+    }
+    const editUser = event.target.closest("[data-edit-user]");
+    if (editUser) {
+      const targetUser = state.platform.users.find((item) => item.id === editUser.dataset.editUser);
+      if (!targetUser) return;
+      const name = prompt("Nombre del usuario", targetUser.name);
+      if (name === null) return;
+      const role = prompt("Rol del usuario", targetUser.role);
+      if (role === null) return;
+      const permissions = POS_MODULES.filter(([, label]) => confirm(`Permitir modulo "${label}" para ${name}?`)).map(([value]) => value);
+      const resetPassword = confirm("Generar nueva contrasena temporal para este usuario?");
+      const updated = await api(`/platform/users/${targetUser.id}`, { method: "PATCH", body: JSON.stringify({ name, role, permissions, resetPassword }) });
+      if (updated.temporaryPassword) {
+        state.lastCredentials = {
+          company: updated.company,
+          name: updated.name,
+          email: updated.email,
+          password: updated.temporaryPassword,
+          license: updated.license
+        };
+      }
+      await loadPlatform();
+      toast("Usuario actualizado.");
+    }
+    const deleteUser = event.target.closest("[data-delete-user]");
+    if (deleteUser) {
+      const targetUser = state.platform.users.find((item) => item.id === deleteUser.dataset.deleteUser);
+      if (!confirm(`Desactivar acceso de ${targetUser?.name || "este usuario"}?`)) return;
+      await api(`/platform/users/${deleteUser.dataset.deleteUser}`, { method: "DELETE" });
+      await loadPlatform();
+      toast("Usuario desactivado.");
+    }
+    const editCompanyUser = event.target.closest("[data-edit-company-user]");
+    if (editCompanyUser) {
+      const targetUser = state.companyUsers.find((item) => item.id === editCompanyUser.dataset.editCompanyUser);
+      if (!targetUser) return;
+      const name = prompt("Nombre del usuario", targetUser.name);
+      if (name === null) return;
+      const role = prompt("Rol del usuario", targetUser.role);
+      if (role === null) return;
+      const permissions = POS_MODULES
+        .filter(([value]) => value !== "users")
+        .filter(([, label]) => confirm(`Permitir modulo "${label}" para ${name}?`))
+        .map(([value]) => value);
+      const resetPassword = confirm("Generar nueva contrasena temporal para este usuario?");
+      const updated = await api(`/users/${targetUser.id}`, { method: "PATCH", body: JSON.stringify({ name, role, permissions, resetPassword }) });
+      if (updated.temporaryPassword) {
+        state.lastCredentials = {
+          company: updated.company,
+          name: updated.name,
+          email: updated.email,
+          password: updated.temporaryPassword,
+          license: updated.license
+        };
+      }
+      await loadAll();
+      toast("Usuario actualizado.");
+    }
+    const deleteCompanyUser = event.target.closest("[data-delete-company-user]");
+    if (deleteCompanyUser) {
+      const targetUser = state.companyUsers.find((item) => item.id === deleteCompanyUser.dataset.deleteCompanyUser);
+      if (!confirm(`Desactivar acceso de ${targetUser?.name || "este usuario"}?`)) return;
+      await api(`/users/${deleteCompanyUser.dataset.deleteCompanyUser}`, { method: "DELETE" });
+      await loadAll();
+      toast("Usuario desactivado.");
+    }
+    const add = event.target.closest("[data-add]");
+    if (add) {
+      const product = state.products.find((p) => p.id === add.dataset.add);
+      const existing = state.cart.find((i) => i.id === product.id);
+      if (existing) existing.qty += 1;
+      else state.cart.push({ id: product.id, productId: product.id, name: product.name, price: product.price, qty: 1 });
+      render();
+    }
+    const inc = event.target.closest("[data-inc]");
+    if (inc) {
+      state.cart.find((i) => i.id === inc.dataset.inc).qty += 1;
+      render();
+    }
+    const dec = event.target.closest("[data-dec]");
+    if (dec) {
+      const item = state.cart.find((i) => i.id === dec.dataset.dec);
+      item.qty -= 1;
+      state.cart = state.cart.filter((i) => i.qty > 0);
+      render();
+    }
+    if (event.target.closest("[data-clear]")) {
+      state.cart = [];
+      render();
+    }
+    if (event.target.closest("[data-checkout]")) {
+      const clientId = document.querySelector("#saleClient").value;
+      const method = document.querySelector("#saleMethod")?.value || "Efectivo";
+      const subtotal = state.cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+      await api("/sales", { method: "POST", body: JSON.stringify({ clientId, items: state.cart.map((i) => ({ productId: i.productId, qty: i.qty, price: i.price })), subtotal, total: subtotal, method }) });
+      state.cart = [];
+      await loadAll();
+      toast("Venta registrada y sincronizada.");
+    }
+    const cancel = event.target.closest("[data-cancel]");
+    if (cancel) {
+      const reason = prompt("Motivo de cancelacion", "Devolucion de producto");
+      if (reason === null) return;
+      await api(`/sales/${cancel.dataset.cancel}/cancel`, { method: "POST", body: JSON.stringify({ reason }) });
+      await loadAll();
+      toast("Venta cancelada. Inventario sincronizado.");
+    }
+    if (event.target.closest("[data-export]")) {
+      const blob = new Blob([JSON.stringify({ clients: state.clients, products: state.products, sales: state.sales, sequence: state.sequence }, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = Object.assign(document.createElement("a"), { href: url, download: "mia-mor-cafe-snapshot.json" });
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
+if (state.token) loadAll().catch(() => renderLogin());
+else renderLogin();

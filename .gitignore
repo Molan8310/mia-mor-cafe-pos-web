@@ -1,0 +1,7 @@
+node_modules/
+*.log
+*.err
+backend/data/database.json
+backend/data/backups/
+cloudflared.*
+.env
