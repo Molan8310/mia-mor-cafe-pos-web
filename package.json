@@ -1,6 +1,6 @@
 {
   "name": "mia-mor-cafe-saas-web-comercial",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "private": true,
   "description": "Sistema POS web comercial de Mia Mor Cafe.",
   "scripts": {

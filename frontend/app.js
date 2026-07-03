@@ -364,7 +364,7 @@ function productsView() {
 }
 
 function salesView() {
-  return `<div class="panel"><div class="table-wrap"><table><thead><tr><th>Folio</th><th>Total</th><th>Estado</th><th>Cliente</th><th></th></tr></thead><tbody>${state.sales.map((s) => `<tr class="${s.status === "CANCELLED" ? "cancelled" : ""}"><td>${s.folio}</td><td>${money.format(s.total)}</td><td>${s.status}</td><td>${clientName(s.clientId)}</td><td>${s.status === "CANCELLED" ? "" : `<button class="danger" data-cancel="${s.id}">Cancelar</button>`}</td></tr>`).join("")}</tbody></table></div></div>`;
+  return `<div class="panel"><div class="table-wrap"><table><thead><tr><th>Folio</th><th>Total</th><th>Pago</th><th>Estado</th><th>Cliente</th><th></th></tr></thead><tbody>${state.sales.map((s) => `<tr class="${s.status === "CANCELLED" ? "cancelled" : ""}"><td>${s.folio}</td><td>${money.format(s.total)}</td><td>${s.method || "Efectivo"}</td><td>${s.status}</td><td>${clientName(s.clientId)}</td><td><div class="actions"><button class="ghost" data-print-sale="${s.id}">Ticket</button>${s.status === "CANCELLED" ? "" : `<button class="danger" data-cancel="${s.id}">Cancelar</button>`}</div></td></tr>`).join("")}</tbody></table></div></div>`;
 }
 
 function syncView() {
@@ -377,6 +377,89 @@ function auditView() {
 
 function clientName(id) {
   return state.clients.find((c) => c.id === id)?.name || "Publico en General";
+}
+
+function productName(id) {
+  return state.products.find((p) => p.id === id)?.name || "Producto";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char]);
+}
+
+function ticketHtml(sale) {
+  const rows = (sale.items || []).map((item) => {
+    const qty = Number(item.qty || 0);
+    const price = Number(item.price || 0);
+    return `
+      <tr>
+        <td>${escapeHtml(productName(item.productId))}<br><small>${qty} x ${money.format(price)}</small></td>
+        <td>${money.format(qty * price)}</td>
+      </tr>
+    `;
+  }).join("");
+  return `<!doctype html>
+    <html lang="es">
+      <head>
+        <meta charset="utf-8" />
+        <title>Ticket ${escapeHtml(sale.folio || "")}</title>
+        <style>
+          @page { size: 80mm auto; margin: 6mm; }
+          * { box-sizing: border-box; }
+          body { width: 68mm; margin: 0 auto; color: #241b16; font-family: Arial, sans-serif; font-size: 12px; }
+          .center { text-align: center; }
+          h1 { margin: 0 0 4px; font-size: 18px; }
+          p { margin: 3px 0; }
+          .line { border-top: 1px dashed #8b7869; margin: 10px 0; }
+          table { width: 100%; border-collapse: collapse; }
+          td { padding: 5px 0; vertical-align: top; border-bottom: 1px dotted #d8c7b8; }
+          td:last-child { text-align: right; white-space: nowrap; }
+          small { color: #766960; }
+          .total { display: flex; justify-content: space-between; margin-top: 10px; font-size: 16px; font-weight: 800; }
+          .meta { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; }
+        </style>
+      </head>
+      <body>
+        <div class="center">
+          <h1>Mía Mor Café</h1>
+          <p>Punto de venta</p>
+        </div>
+        <div class="line"></div>
+        <div class="meta">
+          <span>Folio</span><strong>${escapeHtml(sale.folio || "")}</strong>
+          <span>Fecha</span><strong>${escapeHtml(new Date(sale.createdAt || Date.now()).toLocaleString("es-MX"))}</strong>
+          <span>Cliente</span><strong>${escapeHtml(clientName(sale.clientId))}</strong>
+          <span>Pago</span><strong>${escapeHtml(sale.method || "Efectivo")}</strong>
+        </div>
+        <div class="line"></div>
+        <table><tbody>${rows}</tbody></table>
+        <div class="total"><span>Total</span><span>${money.format(Number(sale.total || 0))}</span></div>
+        <div class="line"></div>
+        <p class="center">Gracias por su compra.</p>
+      </body>
+    </html>`;
+}
+
+function printTicket(sale) {
+  if (!sale) return;
+  const frame = document.createElement("iframe");
+  frame.className = "ticket-frame";
+  document.body.appendChild(frame);
+  const doc = frame.contentWindow.document;
+  doc.open();
+  doc.write(ticketHtml(sale));
+  doc.close();
+  frame.onload = () => {
+    frame.contentWindow.focus();
+    frame.contentWindow.print();
+    setTimeout(() => frame.remove(), 1200);
+  };
 }
 
 function collectClientAttributes(form) {
@@ -685,10 +768,16 @@ document.addEventListener("click", async (event) => {
       const clientId = document.querySelector("#saleClient").value;
       const method = document.querySelector("#saleMethod")?.value || "Efectivo";
       const subtotal = state.cart.reduce((sum, item) => sum + item.price * item.qty, 0);
-      await api("/sales", { method: "POST", body: JSON.stringify({ clientId, items: state.cart.map((i) => ({ productId: i.productId, qty: i.qty, price: i.price })), subtotal, total: subtotal, method }) });
+      const sale = await api("/sales", { method: "POST", body: JSON.stringify({ clientId, items: state.cart.map((i) => ({ productId: i.productId, qty: i.qty, price: i.price })), subtotal, total: subtotal, method }) });
+      printTicket(sale);
       state.cart = [];
       await loadAll();
-      toast("Venta registrada y sincronizada.");
+      toast("Venta registrada. Ticket listo para imprimir.");
+    }
+    const printSale = event.target.closest("[data-print-sale]");
+    if (printSale) {
+      const sale = state.sales.find((item) => item.id === printSale.dataset.printSale);
+      printTicket(sale);
     }
     const cancel = event.target.closest("[data-cancel]");
     if (cancel) {
