@@ -6,8 +6,7 @@ const POS_MODULES = [
   ["users", "Alta de usuarios"],
   ["products", "Productos"],
   ["sales", "Ventas"],
-  ["sync", "Sincronizacion"],
-  ["audit", "Auditoria"]
+  ["sync", "Sincronizacion"]
 ];
 const PLATFORM_MODULES = [
   ["platformDashboard", "Dashboard matriz"],
@@ -27,11 +26,13 @@ const CLIENT_ATTRIBUTES = [
 ];
 const ROLE_DEFAULT_PERMISSIONS = {
   SUPER_ADMIN: PLATFORM_MODULES.map(([key]) => key),
-  ADMINISTRADOR: ["dashboard", "pos", "clients", "products", "sales", "sync", "audit"],
+  ADMINISTRADOR: ["dashboard", "pos", "clients", "products", "sales", "sync"],
   CAJERO: ["dashboard", "pos", "clients", "sales", "sync"],
   INVENTARIO: ["dashboard", "products", "sync"],
-  REPORTES: ["dashboard", "sales", "sync", "audit"]
+  REPORTES: ["dashboard", "sales", "sync"]
 };
+const PAYMENT_METHODS = ["Efectivo", "Tarjeta", "Transferencia", "Cheque"];
+const POS_PAGE_SIZE = 6;
 
 const state = {
   api: API_DEFAULT,
@@ -43,6 +44,9 @@ const state = {
   sales: [],
   audit: [],
   cart: [],
+  saleMethod: "Efectivo",
+  posPage: 1,
+  productEditingId: "",
   platform: { summary: {}, customers: [], licenses: [], users: [], plans: [], audit: [], sync: {} },
   lastCredentials: null,
   view: localStorage.getItem("mia_saas_view") || "dashboard",
@@ -166,7 +170,6 @@ function title() {
     products: "Productos / inventario",
     sales: "Ventas y cancelaciones",
     sync: "Sincronizacion",
-    audit: "Auditoria",
     platformDashboard: "Dashboard matriz",
     platformCustomers: "Negocios / licencias",
     platformUsers: "Alta de usuarios",
@@ -189,7 +192,6 @@ function view() {
   if (state.view === "products") return productsView();
   if (state.view === "sales") return salesView();
   if (state.view === "sync") return syncView();
-  if (state.view === "audit") return auditView();
   return dashboardView();
 }
 
@@ -202,7 +204,7 @@ function dashboardView() {
       <article class="card"><span>Ventas validas</span><strong>${validSales.length}</strong></article>
       <article class="card"><span>Ingresos</span><strong>${money.format(validSales.reduce((s, v) => s + v.total, 0))}</strong></article>
     </div>
-    <div class="panel" style="margin-top:16px"><div class="panel-head"><h3>Estado comercial del cliente</h3><span class="muted">Secuencia ${state.sequence}</span></div><p>Clientes, ventas, inventario, cancelaciones y auditoria se sincronizan con la API central.</p></div>
+    <div class="panel" style="margin-top:16px"><div class="panel-head"><h3>Estado comercial del cliente</h3></div><p>Clientes, ventas, inventario y cancelaciones se sincronizan con la API central.</p></div>
   `;
 }
 
@@ -239,7 +241,6 @@ function platformCustomersView() {
         <label><input type="checkbox" name="modules" value="products" checked /> Productos</label>
         <label><input type="checkbox" name="modules" value="sales" checked /> Ventas</label>
         <label><input type="checkbox" name="modules" value="sync" checked /> Sincronizacion</label>
-        <label><input type="checkbox" name="modules" value="audit" checked /> Auditoria</label>
         <button class="primary">Crear negocio y usuario</button>
       </form>
     </div>
@@ -313,20 +314,51 @@ function platformAuditView() {
 
 function posView() {
   const total = state.cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const pageCount = Math.max(1, Math.ceil(state.products.length / POS_PAGE_SIZE));
+  state.posPage = Math.min(Math.max(1, state.posPage), pageCount);
+  const start = (state.posPage - 1) * POS_PAGE_SIZE;
+  const pageProducts = state.products.slice(start, start + POS_PAGE_SIZE);
   return `
     <div class="pos-layout">
       <section class="panel">
-        <div class="panel-head"><h3>Productos</h3><button class="ghost" data-refresh>Actualizar</button></div>
-        <div class="products">${state.products.map((p) => `<button class="product" data-add="${p.id}" ${p.stock <= 0 ? "disabled" : ""}><strong>${p.name}</strong><small>${p.category} · Stock ${p.stock}</small><span class="price">${money.format(p.price)}</span></button>`).join("")}</div>
+        <div class="panel-head"><div><h3>Productos</h3><span class="muted">Panel de venta con imagen, descripcion y stock actual.</span></div><button class="ghost" data-refresh>Actualizar</button></div>
+        <div class="products">${pageProducts.map(productCard).join("")}</div>
+        <div class="pager"><span>Mostrando ${state.products.length ? start + 1 : 0} a ${Math.min(start + POS_PAGE_SIZE, state.products.length)} de ${state.products.length} productos</span><div class="actions"><button class="ghost" data-page="prev" ${state.posPage <= 1 ? "disabled" : ""}>‹</button><strong>${state.posPage}</strong><button class="ghost" data-page="next" ${state.posPage >= pageCount ? "disabled" : ""}>›</button></div></div>
       </section>
       <aside class="panel cart">
         <div class="panel-head"><h3>Carrito</h3><button class="ghost" data-clear>Limpiar</button></div>
         <label class="field">Cliente<select id="saleClient">${state.clients.map((c) => `<option value="${c.id}">${c.name}</option>`).join("")}</select></label>
-        <label class="field">Pago<select id="saleMethod"><option>Efectivo</option><option>Tarjeta</option><option>Transferencia</option><option>Mixto</option></select></label>
-        <div class="rows" style="margin-top:12px">${state.cart.map((item) => `<div class="row"><div><strong>${item.name}</strong><small>${item.qty} x ${money.format(item.price)}</small></div><div class="actions"><button class="ghost" data-dec="${item.id}">-</button><button class="ghost" data-inc="${item.id}">+</button></div></div>`).join("") || `<div class="row"><span class="muted">Carrito vacio</span></div>`}</div>
+        <label class="field">Pago<select id="saleMethod">${[...PAYMENT_METHODS, "Mixto"].map((method) => `<option ${state.saleMethod === method ? "selected" : ""}>${method}</option>`).join("")}</select></label>
+        ${state.saleMethod === "Mixto" ? mixedPaymentView(total) : ""}
+        <div class="rows" style="margin-top:12px">${state.cart.map((item) => `<div class="row cart-line"><div class="cart-item-info"><strong>${item.name}</strong><small>${item.qty} x ${money.format(item.price)}</small></div><div class="actions"><button class="ghost" data-dec="${item.id}">-</button><button class="ghost" data-inc="${item.id}">+</button></div></div>`).join("") || `<div class="row"><span class="muted">Carrito vacio</span></div>`}</div>
         <div class="total"><span>Total</span><span>${money.format(total)}</span></div>
         <button class="primary" data-checkout ${state.cart.length ? "" : "disabled"} style="width:100%;margin-top:12px">Cobrar venta</button>
       </aside>
+    </div>
+  `;
+}
+
+function productCard(product) {
+  return `
+    <button class="product product-card" data-add="${product.id}" ${Number(product.stock || 0) <= 0 ? "disabled" : ""}>
+      <img src="${productImage(product)}" alt="${escapeHtml(product.name)}" />
+      <span class="product-info">
+        <strong>${product.name}</strong>
+        <small>${product.category || "Sin categoria"} · Stock ${Number(product.stock || 0)}</small>
+        <span class="product-description">${product.description || "Producto disponible para venta."}</span>
+        <span class="price">${money.format(product.price)}</span>
+      </span>
+    </button>
+  `;
+}
+
+function mixedPaymentView(total) {
+  return `
+    <div class="mixed-payments">
+      <strong>Pago mixto</strong>
+      <small class="muted">Selecciona dos o mas formas y captura el importe de cada una.</small>
+      ${PAYMENT_METHODS.map((method) => `<label><input type="checkbox" data-mixed-check="${method}" /> ${method}<input type="number" min="0" step="0.01" placeholder="$0.00" data-mixed-amount="${method}" /></label>`).join("")}
+      <small>Total a cubrir: ${money.format(total)}</small>
     </div>
   `;
 }
@@ -360,11 +392,32 @@ function clientActions(client) {
 }
 
 function productsView() {
-  return `<div class="panel"><div class="table-wrap"><table><thead><tr><th>Producto</th><th>Categoria</th><th>Precio</th><th>Stock</th><th>Vendidos</th></tr></thead><tbody>${state.products.map((p) => `<tr><td>${p.name}</td><td>${p.category}</td><td>${money.format(p.price)}</td><td>${p.stock}</td><td>${p.sold || 0}</td></tr>`).join("")}</tbody></table></div></div>`;
+  const editing = state.products.find((product) => product.id === state.productEditingId);
+  return `
+    <div class="panel">
+      <div class="panel-head"><h3>${editing ? "Editar producto" : "Nuevo producto"}</h3><div class="actions"><button class="ghost" data-export-products>Exportar inventario</button>${editing ? `<button class="ghost" data-cancel-product-edit>Cancelar edicion</button>` : ""}</div></div>
+      <form id="productForm" class="product-form">
+        <input type="hidden" name="id" value="${editing?.id || ""}" />
+        <input name="name" placeholder="Producto" value="${escapeHtml(editing?.name || "")}" required />
+        <input name="category" placeholder="Categoria" value="${escapeHtml(editing?.category || "")}" />
+        <input name="description" placeholder="Descripcion" value="${escapeHtml(editing?.description || "")}" />
+        <input name="price" type="number" min="0" step="0.01" placeholder="Precio" value="${editing?.price ?? ""}" />
+        <input name="cost" type="number" min="0" step="0.01" placeholder="Costo" value="${editing?.cost ?? ""}" />
+        <input name="stock" type="number" min="0" step="1" placeholder="Stock" value="${editing?.stock ?? 0}" />
+        <input name="minStock" type="number" min="0" step="1" placeholder="Stock minimo" value="${editing?.minStock ?? 0}" />
+        <label class="field">Fecha de elaboracion<input name="productionDate" type="date" value="${editing?.productionDate || ""}" /></label>
+        <label class="field">Fecha de caducidad<input name="expirationDate" type="date" value="${editing?.expirationDate || ""}" /></label>
+        <input name="imageUrl" placeholder="Ruta/URL de imagen" value="${escapeHtml(editing?.imageUrl || "")}" />
+        <label class="field">Imagen del producto<input name="imageFile" type="file" accept="image/*" /></label>
+        <button class="primary">${editing ? "Actualizar producto" : "Guardar producto"}</button>
+      </form>
+    </div>
+    <div class="panel" style="margin-top:16px"><div class="table-wrap"><table><thead><tr><th>Producto</th><th>Categoria</th><th>Precio</th><th>Stock</th><th>Vendidos</th><th>Elaboracion</th><th>Caducidad</th><th>Acciones</th></tr></thead><tbody>${state.products.map((p) => `<tr><td><div class="product-cell"><img src="${productImage(p)}" alt="" /><span>${p.name}</span></div></td><td>${p.category || "-"}</td><td>${money.format(p.price)}</td><td>${p.stock}</td><td>${p.sold || 0}</td><td>${p.productionDate || "-"}</td><td>${p.expirationDate || "-"}</td><td><div class="actions"><button class="ghost" data-edit-product="${p.id}">Editar</button><button class="danger" data-delete-product="${p.id}">Eliminar</button></div></td></tr>`).join("")}</tbody></table></div></div>
+  `;
 }
 
 function salesView() {
-  return `<div class="panel"><div class="table-wrap"><table><thead><tr><th>Folio</th><th>Total</th><th>Pago</th><th>Estado</th><th>Cliente</th><th></th></tr></thead><tbody>${state.sales.map((s) => `<tr class="${s.status === "CANCELLED" ? "cancelled" : ""}"><td>${s.folio}</td><td>${money.format(s.total)}</td><td>${s.method || "Efectivo"}</td><td>${s.status}</td><td>${clientName(s.clientId)}</td><td><div class="actions"><button class="ghost" data-print-sale="${s.id}">Ticket</button>${s.status === "CANCELLED" ? "" : `<button class="danger" data-cancel="${s.id}">Cancelar</button>`}</div></td></tr>`).join("")}</tbody></table></div></div>`;
+  return `<div class="panel"><div class="panel-head"><h3>Historial de ventas</h3><button class="ghost" data-export-sales>Exportar ventas</button></div><div class="table-wrap"><table><thead><tr><th>Folio</th><th>Total</th><th>Pago</th><th>Estado</th><th>Cliente</th><th></th></tr></thead><tbody>${state.sales.map((s) => `<tr class="${s.status === "CANCELLED" ? "cancelled" : ""}"><td>${s.folio}</td><td>${money.format(s.total)}</td><td>${s.method || "Efectivo"}</td><td>${s.status}</td><td>${clientName(s.clientId)}</td><td><div class="actions"><button class="ghost" data-print-sale="${s.id}">Ticket</button>${s.status === "CANCELLED" ? "" : `<button class="danger" data-cancel="${s.id}">Cancelar</button>`}</div></td></tr>`).join("") || `<tr><td colspan="6">Sin ventas registradas</td></tr>`}</tbody></table></div></div>`;
 }
 
 function syncView() {
@@ -379,8 +432,58 @@ function clientName(id) {
   return state.clients.find((c) => c.id === id)?.name || "Publico en General";
 }
 
+function productImage(product) {
+  return product?.imageUrl || "assets/logo-ui.png";
+}
+
 function productName(id) {
   return state.products.find((p) => p.id === id)?.name || "Producto";
+}
+
+function readImageFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) return resolve("");
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("No se pudo leer la imagen"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function exportTable(filename, rows) {
+  const tableRows = rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("");
+  const html = `<html><head><meta charset="utf-8" /></head><body><table>${tableRows}</table></body></html>`;
+  const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = Object.assign(document.createElement("a"), { href: url, download: filename });
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportInventory() {
+  exportTable("inventario-mia-mor-cafe.xls", [
+    ["Producto", "Categoria", "Descripcion", "Precio", "Costo", "Stock", "Stock minimo", "Vendidos", "Fecha de elaboracion", "Fecha de caducidad"],
+    ...state.products.map((p) => [p.name, p.category || "", p.description || "", p.price || 0, p.cost || 0, p.stock || 0, p.minStock || 0, p.sold || 0, p.productionDate || "", p.expirationDate || ""])
+  ]);
+}
+
+function exportSales() {
+  exportTable("ventas-mia-mor-cafe.xls", [
+    ["Folio", "Fecha", "Cliente", "Pago", "Estado", "Subtotal", "Descuento", "Total"],
+    ...state.sales.map((sale) => [sale.folio, sale.createdAt ? new Date(sale.createdAt).toLocaleString("es-MX") : "", clientName(sale.clientId), sale.method || "", sale.status || "", sale.subtotal || 0, sale.discount || 0, sale.total || 0])
+  ]);
+}
+
+function getPaymentData(total) {
+  if (state.saleMethod !== "Mixto") return { method: state.saleMethod, paymentBreakdown: [] };
+  const selected = PAYMENT_METHODS
+    .filter((method) => document.querySelector(`[data-mixed-check="${method}"]`)?.checked)
+    .map((method) => ({ method, amount: Number(document.querySelector(`[data-mixed-amount="${method}"]`)?.value || 0) }))
+    .filter((item) => item.amount > 0);
+  const amount = selected.reduce((sum, item) => sum + item.amount, 0);
+  if (selected.length < 2) throw new Error("Selecciona al menos dos formas para pago mixto.");
+  if (Math.abs(amount - total) > 0.01) throw new Error("El pago mixto debe sumar el total exacto.");
+  return { method: `Mixto: ${selected.map((item) => item.method).join(" + ")}`, paymentBreakdown: selected };
 }
 
 function escapeHtml(value) {
@@ -605,8 +708,37 @@ document.addEventListener("submit", async (event) => {
       await loadAll();
       toast("Cliente sincronizado.");
     }
+    if (event.target.id === "productForm") {
+      const form = new FormData(event.target);
+      const body = Object.fromEntries(form);
+      const imageFile = event.target.elements.imageFile.files[0];
+      if (imageFile) body.imageUrl = await readImageFile(imageFile);
+      delete body.imageFile;
+      const id = body.id;
+      delete body.id;
+      const payload = {
+        ...body,
+        price: Number(body.price || 0),
+        cost: Number(body.cost || 0),
+        stock: Number(body.stock || 0),
+        minStock: Number(body.minStock || 0)
+      };
+      if (id) await api(`/products/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+      else await api("/products", { method: "POST", body: JSON.stringify(payload) });
+      state.productEditingId = "";
+      event.target.reset();
+      await loadAll();
+      toast(id ? "Producto actualizado." : "Producto agregado.");
+    }
   } catch (error) {
     toast(error.message);
+  }
+});
+
+document.addEventListener("change", (event) => {
+  if (event.target.id === "saleMethod") {
+    state.saleMethod = event.target.value;
+    render();
   }
 });
 
@@ -626,6 +758,17 @@ document.addEventListener("click", async (event) => {
     }
     if (event.target.closest("[data-refresh]")) await loadAll();
     if (event.target.closest("[data-sync]")) await syncPending();
+    if (event.target.closest("[data-export-products]")) exportInventory();
+    if (event.target.closest("[data-export-sales]")) exportSales();
+    if (event.target.closest("[data-cancel-product-edit]")) {
+      state.productEditingId = "";
+      render();
+    }
+    const page = event.target.closest("[data-page]");
+    if (page) {
+      state.posPage += page.dataset.page === "next" ? 1 : -1;
+      render();
+    }
     const editCustomer = event.target.closest("[data-edit-customer]");
     if (editCustomer) {
       const customer = state.platform.customers.find((item) => item.id === editCustomer.dataset.editCustomer);
@@ -740,9 +883,23 @@ document.addEventListener("click", async (event) => {
       await loadAll();
       toast("Usuario desactivado.");
     }
+    const editProduct = event.target.closest("[data-edit-product]");
+    if (editProduct) {
+      state.productEditingId = editProduct.dataset.editProduct;
+      render();
+    }
+    const deleteProduct = event.target.closest("[data-delete-product]");
+    if (deleteProduct) {
+      const product = state.products.find((item) => item.id === deleteProduct.dataset.deleteProduct);
+      if (!confirm(`Eliminar producto ${product?.name || ""}?`)) return;
+      await api(`/products/${deleteProduct.dataset.deleteProduct}`, { method: "DELETE" });
+      await loadAll();
+      toast("Producto eliminado.");
+    }
     const add = event.target.closest("[data-add]");
     if (add) {
       const product = state.products.find((p) => p.id === add.dataset.add);
+      if (!product) return;
       const existing = state.cart.find((i) => i.id === product.id);
       if (existing) existing.qty += 1;
       else state.cart.push({ id: product.id, productId: product.id, name: product.name, price: product.price, qty: 1 });
@@ -766,9 +923,9 @@ document.addEventListener("click", async (event) => {
     }
     if (event.target.closest("[data-checkout]")) {
       const clientId = document.querySelector("#saleClient").value;
-      const method = document.querySelector("#saleMethod")?.value || "Efectivo";
       const subtotal = state.cart.reduce((sum, item) => sum + item.price * item.qty, 0);
-      const sale = await api("/sales", { method: "POST", body: JSON.stringify({ clientId, items: state.cart.map((i) => ({ productId: i.productId, qty: i.qty, price: i.price })), subtotal, total: subtotal, method }) });
+      const payment = getPaymentData(subtotal);
+      const sale = await api("/sales", { method: "POST", body: JSON.stringify({ clientId, items: state.cart.map((i) => ({ productId: i.productId, qty: i.qty, price: i.price })), subtotal, total: subtotal, ...payment }) });
       printTicket(sale);
       state.cart = [];
       await loadAll();

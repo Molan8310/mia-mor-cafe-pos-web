@@ -14,14 +14,14 @@ const DATABASE_URL = process.env.DATABASE_URL || "";
 let pgPool = null;
 
 const seedProducts = [
-  ["Iced Coffee", "Bebidas frias", 80, 34, 18, 5],
-  ["Iced Caramel Macchiato", "Bebidas frias", 95, 39, 14, 5],
-  ["Iced Mocha Latte", "Bebidas frias", 90, 37, 14, 5],
-  ["Cafe Americano CH", "Cafe caliente", 35, 12, 30, 8],
-  ["Tarta Vasca", "Postres", 90, 42, 8, 3],
-  ["Cupcakes", "Postres", 35, 14, 18, 6],
-  ["Tiramisu de Pistache", "Postres", 90, 40, 8, 3],
-  ["Cafe en grano 500 g", "Cafe en grano", 375, 220, 10, 3]
+  { name: "Iced Coffee", category: "Bebidas frias", price: 80, cost: 34, minStock: 5, description: "Cafe frio, cremoso y refrescante.", imageUrl: "assets/products/iced-coffee.jpg" },
+  { name: "Iced Caramel Macchiato", category: "Bebidas frias", price: 95, cost: 39, minStock: 5, description: "Cafe, leche, crema y caramelo.", imageUrl: "assets/products/iced-caramel-macchiato.jpg" },
+  { name: "Iced Mocha Latte", category: "Bebidas frias", price: 90, cost: 37, minStock: 5, description: "Cafe, leche, chocolate y crema batida.", imageUrl: "assets/products/iced-mocha-latte.jpg" },
+  { name: "Cafe Americano CH", category: "Cafe caliente", price: 35, cost: 12, minStock: 8, description: "Cafe caliente en vaso chico.", imageUrl: "assets/products/cafe-americano-ch.jpg" },
+  { name: "Tarta Vasca", category: "Postres", price: 90, cost: 42, minStock: 3, description: "Postre cremoso y dorado.", imageUrl: "assets/products/tarta-vasca.jpg" },
+  { name: "Cupcakes", category: "Postres", price: 35, cost: 14, minStock: 6, description: "Postres suaves para acompanar cafe.", imageUrl: "assets/products/cupcakes.jpg" },
+  { name: "Tiramisu de Pistache", category: "Postres", price: 90, cost: 40, minStock: 3, description: "Tiramisu cremoso con pistache.", imageUrl: "assets/products/tiramisu-de-pistache.jpg" },
+  { name: "Cafe en grano 500 g", category: "Cafe en grano", price: 375, cost: 220, minStock: 3, description: "Cafe en grano 100% arabica de Veracruz.", imageUrl: "assets/products/cafe-en-grano-500g.jpg" }
 ];
 
 const MODULES = ["dashboard", "pos", "clients", "users", "products", "sales", "sync", "audit"];
@@ -29,10 +29,10 @@ const OPERATIONAL_MODULES = MODULES.filter((module) => module !== "users");
 const PLATFORM_MODULES = ["platformDashboard", "platformCustomers", "platformUsers", "platformPlans", "platformSync", "platformAudit"];
 const ROLE_PERMISSIONS = {
   SUPER_ADMIN: PLATFORM_MODULES,
-  ADMINISTRADOR: ["dashboard", "pos", "clients", "products", "sales", "sync", "audit"],
+  ADMINISTRADOR: ["dashboard", "pos", "clients", "products", "sales", "sync"],
   CAJERO: ["dashboard", "pos", "clients", "sales", "sync"],
   INVENTARIO: ["dashboard", "products", "sync"],
-  REPORTES: ["dashboard", "sales", "sync", "audit"]
+  REPORTES: ["dashboard", "sales", "sync"]
 };
 
 function normalizeEmail(email) {
@@ -64,7 +64,7 @@ function isPrincipalAdmin(db, user) {
 
 function effectivePermissions(db, user) {
   if (user.role === "SUPER_ADMIN") return ROLE_PERMISSIONS.SUPER_ADMIN;
-  if (isPrincipalAdmin(db, user)) return MODULES;
+  if (isPrincipalAdmin(db, user)) return MODULES.filter((module) => module !== "audit");
   if (user.companyId) {
     const company = db.companies.find((item) => item.id === user.companyId && !item.deletedAt);
     const allowed = Array.isArray(company?.modules) && company.modules.length ? company.modules : MODULES;
@@ -98,6 +98,10 @@ function temporaryPassword() {
 function isCounterClientName(name) {
   const value = normalizeEmail(name);
   return value === "publico en general" || value === "cliente mostrador";
+}
+
+function productKey(name) {
+  return String(name || "").trim().toLowerCase();
 }
 
 function verifyPassword(password, stored) {
@@ -209,16 +213,20 @@ function initialDb() {
       updatedAt: now(),
       deletedAt: null
     }],
-    products: seedProducts.map(([name, category, price, cost, stock, minStock]) => ({
+    products: seedProducts.map((seed) => ({
       id: id("prd"),
       companyId,
-      name,
-      category,
-      price,
-      cost,
-      stock,
-      minStock,
+      name: seed.name,
+      category: seed.category,
+      description: seed.description,
+      imageUrl: seed.imageUrl,
+      price: seed.price,
+      cost: seed.cost,
+      stock: 0,
+      minStock: seed.minStock,
       sold: 0,
+      productionDate: "",
+      expirationDate: "",
       active: true,
       syncedAt: now(),
       createdAt: now(),
@@ -315,8 +323,35 @@ function migrateDb(db) {
     client.attributes = Array.isArray(client.attributes) && client.attributes.length ? client.attributes : ["active"];
   });
 
+  const seedByName = new Map(seedProducts.map((seed) => [productKey(seed.name), seed]));
+  db.products.forEach((product) => {
+    const seed = seedByName.get(productKey(product.name));
+    product.description ||= seed?.description || "";
+    product.imageUrl ||= seed?.imageUrl || "";
+    product.productionDate ||= "";
+    product.expirationDate ||= "";
+    product.minStock = Number(product.minStock || seed?.minStock || 0);
+    product.cost = Number(product.cost || seed?.cost || 0);
+  });
+
+  if (!db.meta.resetCommercialData20260707) {
+    db.products.forEach((product) => {
+      product.stock = 0;
+      product.sold = 0;
+      product.updatedAt = now();
+    });
+    db.sales.forEach((sale) => {
+      sale.deletedAt ||= now();
+      sale.updatedAt = now();
+    });
+    db.auditLogs = [];
+    db.meta.resetCommercialData20260707 = true;
+  }
+
   db.companies.forEach((company) => {
-    company.modules = Array.isArray(company.modules) && company.modules.length ? company.modules : MODULES;
+    company.modules = Array.isArray(company.modules) && company.modules.length
+      ? company.modules.filter((module) => module !== "audit")
+      : MODULES.filter((module) => module !== "audit");
     if (!company.modules.includes("users")) company.modules.push("users");
     company.plan = company.plan === legacyPlanName ? "Version final" : (company.plan || "Version final");
     if (company.license === legacyLicenseKey) company.license = "MAZE-FINAL-MIAM-2026";
@@ -588,8 +623,25 @@ async function handle(req, res) {
         db.licenses.unshift(license);
         db.users.unshift(admin);
         db.clients.unshift({ id: id("cli"), companyId, name: "Publico en General", phone: "", email: "", address: "", points: 0, attributes: ["active"], syncedAt: now(), createdAt: now(), updatedAt: now(), deletedAt: null });
-        db.products.unshift(...seedProducts.map(([name, category, price, cost, stock, minStock]) => ({
-          id: id("prd"), companyId, name, category, price, cost, stock, minStock, sold: 0, active: true, syncedAt: now(), createdAt: now(), updatedAt: now(), deletedAt: null
+        db.products.unshift(...seedProducts.map((seed) => ({
+          id: id("prd"),
+          companyId,
+          name: seed.name,
+          category: seed.category,
+          description: seed.description,
+          imageUrl: seed.imageUrl,
+          price: seed.price,
+          cost: seed.cost,
+          stock: 0,
+          minStock: seed.minStock,
+          sold: 0,
+          productionDate: "",
+          expirationDate: "",
+          active: true,
+          syncedAt: now(),
+          createdAt: now(),
+          updatedAt: now(),
+          deletedAt: null
         })));
         touchSync(db, companyId, "companies", companyId, "CREATE", company);
         audit(db, null, user.id, "PLATFORM_CUSTOMER_CREATE", { companyId, licenseKey: key });
@@ -913,13 +965,69 @@ async function handle(req, res) {
     if (routeKey(req, url.pathname) === "POST /api/products") {
       assertPermission(db, user, "products");
       const body = await readBody(req);
-      const product = { id: body.id || id("prd"), companyId, name: body.name, category: body.category || "", price: Number(body.price || 0), cost: Number(body.cost || 0), stock: Number(body.stock || 0), minStock: Number(body.minStock || 0), sold: Number(body.sold || 0), active: body.active !== false, syncedAt: now(), createdAt: body.createdAt || now(), updatedAt: now(), deletedAt: null };
+      const product = {
+        id: body.id || id("prd"),
+        companyId,
+        name: body.name,
+        category: body.category || "",
+        description: body.description || "",
+        imageUrl: body.imageUrl || "",
+        price: Number(body.price || 0),
+        cost: Number(body.cost || 0),
+        stock: Number(body.stock || 0),
+        minStock: Number(body.minStock || 0),
+        sold: Number(body.sold || 0),
+        productionDate: body.productionDate || "",
+        expirationDate: body.expirationDate || "",
+        active: body.active !== false,
+        syncedAt: now(),
+        createdAt: body.createdAt || now(),
+        updatedAt: now(),
+        deletedAt: null
+      };
       db.products = db.products.filter((item) => item.id !== product.id);
       db.products.unshift(product);
       touchSync(db, companyId, "products", product.id, "UPSERT", product);
       audit(db, companyId, user.id, "PRODUCT_UPSERT", { productId: product.id });
       await saveDb(db);
       return send(res, 201, product);
+    }
+
+    const productMatch = url.pathname.match(/^\/api\/products\/([^/]+)$/);
+    if (req.method === "PATCH" && productMatch) {
+      assertPermission(db, user, "products");
+      const body = await readBody(req);
+      const product = db.products.find((item) => item.id === productMatch[1] && item.companyId === companyId && !item.deletedAt);
+      if (!product) throw httpError(404, "Producto no encontrado");
+      product.name = body.name || product.name;
+      product.category = body.category || "";
+      product.description = body.description || "";
+      product.imageUrl = body.imageUrl || "";
+      product.price = Number(body.price || 0);
+      product.cost = Number(body.cost || 0);
+      product.stock = Number(body.stock || 0);
+      product.minStock = Number(body.minStock || 0);
+      product.productionDate = body.productionDate || "";
+      product.expirationDate = body.expirationDate || "";
+      product.active = body.active !== false;
+      product.updatedAt = now();
+      product.syncedAt = now();
+      touchSync(db, companyId, "products", product.id, "UPDATE", product);
+      audit(db, companyId, user.id, "PRODUCT_UPDATE", { productId: product.id });
+      await saveDb(db);
+      return send(res, 200, product);
+    }
+
+    if (req.method === "DELETE" && productMatch) {
+      assertPermission(db, user, "products");
+      const product = db.products.find((item) => item.id === productMatch[1] && item.companyId === companyId && !item.deletedAt);
+      if (!product) throw httpError(404, "Producto no encontrado");
+      product.deletedAt = now();
+      product.updatedAt = now();
+      touchSync(db, companyId, "products", product.id, "DELETE", product);
+      audit(db, companyId, user.id, "PRODUCT_DELETE", { productId: product.id });
+      await saveDb(db);
+      return send(res, 200, { ok: true, productId: product.id });
     }
 
     if (routeKey(req, url.pathname) === "GET /api/sales") {
@@ -930,7 +1038,7 @@ async function handle(req, res) {
     if (routeKey(req, url.pathname) === "POST /api/sales") {
       assertPermission(db, user, "pos");
       const body = await readBody(req);
-      const sale = { id: body.id || id("sale"), companyId, clientId: body.clientId || null, folio: `WEB-${Date.now().toString().slice(-6)}`, items: body.items || [], subtotal: Number(body.subtotal || 0), discount: Number(body.discount || 0), total: Number(body.total || 0), method: body.method || "Efectivo", status: "COMPLETED", createdAt: now(), updatedAt: now(), deletedAt: null };
+      const sale = { id: body.id || id("sale"), companyId, clientId: body.clientId || null, folio: `WEB-${Date.now().toString().slice(-6)}`, items: body.items || [], subtotal: Number(body.subtotal || 0), discount: Number(body.discount || 0), total: Number(body.total || 0), method: body.method || "Efectivo", paymentBreakdown: Array.isArray(body.paymentBreakdown) ? body.paymentBreakdown : [], status: "COMPLETED", createdAt: now(), updatedAt: now(), deletedAt: null };
       sale.items.forEach((item) => {
         const product = db.products.find((entry) => entry.id === item.productId && entry.companyId === companyId);
         if (product) {
