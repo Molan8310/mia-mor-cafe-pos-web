@@ -410,7 +410,7 @@ function productsView() {
         <label class="field">Fecha de caducidad<input name="expirationDate" type="date" value="${editing?.expirationDate || ""}" /></label>
         <input name="imageUrl" placeholder="Ruta/URL de imagen" value="${escapeHtml(editing?.imageUrl || "")}" />
         <label class="field">Imagen del producto<input name="imageFile" type="file" accept="image/*" /></label>
-        <button class="primary">${editing ? "Actualizar producto" : "Guardar producto"}</button>
+        <button class="primary" type="button" data-save-product>${editing ? "Actualizar producto" : "Guardar producto"}</button>
       </form>
     </div>
     <div class="panel" style="margin-top:16px"><div class="table-wrap"><table><thead><tr><th>Producto</th><th>Categoria</th><th>Precio</th><th>Stock</th><th>Vendidos</th><th>Elaboracion</th><th>Caducidad</th><th>Acciones</th></tr></thead><tbody>${state.products.map((p) => `<tr><td><div class="product-cell"><img src="${productImage(p)}" alt="" /><span>${p.name}</span></div></td><td>${p.category || "-"}</td><td>${money.format(p.price)}</td><td>${p.stock}</td><td>${p.sold || 0}</td><td>${p.productionDate || "-"}</td><td>${p.expirationDate || "-"}</td><td><div class="actions"><button class="ghost" data-edit-product="${p.id}">Editar</button><button class="danger" data-delete-product="${p.id}">Eliminar</button></div></td></tr>`).join("")}</tbody></table></div></div>
@@ -443,12 +443,54 @@ function productName(id) {
 
 function readImageFile(file) {
   return new Promise((resolve, reject) => {
-    if (!file) return resolve("");
+    if (!file || !file.size) return resolve("");
+    if (!file.type.startsWith("image/")) return reject(new Error("El archivo seleccionado no es una imagen valida."));
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxSize = 900;
+        const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+      img.onerror = () => reject(new Error("No se pudo procesar la imagen seleccionada."));
+      img.src = reader.result;
+    };
     reader.onerror = () => reject(new Error("No se pudo leer la imagen"));
     reader.readAsDataURL(file);
   });
+}
+
+async function saveProductForm(form, submitButton) {
+  const data = new FormData(form);
+  const body = Object.fromEntries(data);
+  const imageFile = form.elements.imageFile?.files?.[0];
+  if (imageFile && imageFile.size) body.imageUrl = await readImageFile(imageFile);
+  delete body.imageFile;
+  const id = body.id;
+  delete body.id;
+  const payload = {
+    ...body,
+    price: Number(body.price || 0),
+    cost: Number(body.cost || 0),
+    stock: Number(body.stock || 0),
+    minStock: Number(body.minStock || 0)
+  };
+  if (!payload.name?.trim()) throw new Error("Captura el nombre del producto.");
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = id ? "Actualizando..." : "Guardando...";
+  }
+  if (id) await api(`/products/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+  else await api("/products", { method: "POST", body: JSON.stringify(payload) });
+  state.productEditingId = "";
+  form.reset();
+  await loadAll();
+  toast(id ? "Producto actualizado." : "Producto agregado.");
 }
 
 function exportTable(filename, rows) {
@@ -710,26 +752,7 @@ document.addEventListener("submit", async (event) => {
       toast("Cliente sincronizado.");
     }
     if (event.target.id === "productForm") {
-      const form = new FormData(event.target);
-      const body = Object.fromEntries(form);
-      const imageFile = event.target.elements.imageFile.files[0];
-      if (imageFile) body.imageUrl = await readImageFile(imageFile);
-      delete body.imageFile;
-      const id = body.id;
-      delete body.id;
-      const payload = {
-        ...body,
-        price: Number(body.price || 0),
-        cost: Number(body.cost || 0),
-        stock: Number(body.stock || 0),
-        minStock: Number(body.minStock || 0)
-      };
-      if (id) await api(`/products/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
-      else await api("/products", { method: "POST", body: JSON.stringify(payload) });
-      state.productEditingId = "";
-      event.target.reset();
-      await loadAll();
-      toast(id ? "Producto actualizado." : "Producto agregado.");
+      await saveProductForm(event.target, event.target.querySelector("[data-save-product]"));
     }
   } catch (error) {
     toast(error.message);
@@ -745,6 +768,13 @@ document.addEventListener("change", (event) => {
 
 document.addEventListener("click", async (event) => {
   try {
+    const saveProduct = event.target.closest("[data-save-product]");
+    if (saveProduct) {
+      const form = saveProduct.closest("#productForm");
+      if (!form) return;
+      await saveProductForm(form, saveProduct);
+      return;
+    }
     const viewButton = event.target.closest("[data-view]");
     if (viewButton) {
       state.view = viewButton.dataset.view;
