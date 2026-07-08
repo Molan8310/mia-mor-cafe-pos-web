@@ -157,6 +157,15 @@ input, select {
   object-fit: cover;
   border-right: 1px solid var(--line);
 }
+.product-card.out-of-stock {
+  opacity: 1;
+  cursor: pointer;
+}
+.product-card.out-of-stock small::after {
+  content: " · Inventario inicial";
+  color: var(--gold);
+  font-weight: 900;
+}
 .product-info { display: grid; align-content: start; gap: 8px; min-width: 0; }
 .product-description { color: var(--muted); font-size: 13px; line-height: 1.35; }
 .product small, .row small { color: var(--muted); }

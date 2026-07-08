@@ -339,12 +339,13 @@ function posView() {
 }
 
 function productCard(product) {
+  const stock = Number(product.stock || 0);
   return `
-    <button class="product product-card" data-add="${product.id}" ${Number(product.stock || 0) <= 0 ? "disabled" : ""}>
+    <button class="product product-card ${stock <= 0 ? "out-of-stock" : ""}" data-add="${product.id}">
       <img src="${productImage(product)}" alt="${escapeHtml(product.name)}" />
       <span class="product-info">
         <strong>${product.name}</strong>
-        <small>${product.category || "Sin categoria"} · Stock ${Number(product.stock || 0)}</small>
+        <small>${product.category || "Sin categoria"} · Stock ${stock}</small>
         <span class="product-description">${product.description || "Producto disponible para venta."}</span>
         <span class="price">${money.format(product.price)}</span>
       </span>

@@ -246,11 +246,22 @@ function getPgPool() {
   if (!pgPool) {
     const { Pool } = require("pg");
     pgPool = new Pool({
-      connectionString: DATABASE_URL,
+      connectionString: pgConnectionString(),
       ssl: process.env.PGSSL === "false" ? false : { rejectUnauthorized: false }
     });
   }
   return pgPool;
+}
+
+function pgConnectionString() {
+  try {
+    const url = new URL(DATABASE_URL);
+    url.searchParams.delete("sslmode");
+    url.searchParams.delete("channel_binding");
+    return url.toString();
+  } catch {
+    return DATABASE_URL;
+  }
 }
 
 async function loadDb() {
