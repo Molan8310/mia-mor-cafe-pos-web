@@ -410,7 +410,7 @@ function productsView() {
         <label class="field">Fecha de caducidad<input name="expirationDate" type="date" value="${editing?.expirationDate || ""}" /></label>
         <input name="imageUrl" placeholder="Ruta/URL de imagen" value="${escapeHtml(editing?.imageUrl || "")}" />
         <label class="field">Imagen del producto<input name="imageFile" type="file" accept="image/*" /></label>
-        <button class="primary" type="button" data-save-product>${editing ? "Actualizar producto" : "Guardar producto"}</button>
+        <button class="primary" type="submit" data-save-product>${editing ? "Actualizar producto" : "Guardar producto"}</button>
       </form>
     </div>
     <div class="panel" style="margin-top:16px"><div class="table-wrap"><table><thead><tr><th>Producto</th><th>Categoria</th><th>Precio</th><th>Stock</th><th>Vendidos</th><th>Elaboracion</th><th>Caducidad</th><th>Acciones</th></tr></thead><tbody>${state.products.map((p) => `<tr><td><div class="product-cell"><img src="${productImage(p)}" alt="" /><span>${p.name}</span></div></td><td>${p.category || "-"}</td><td>${money.format(p.price)}</td><td>${p.stock}</td><td>${p.sold || 0}</td><td>${p.productionDate || "-"}</td><td>${p.expirationDate || "-"}</td><td><div class="actions"><button class="ghost" data-edit-product="${p.id}">Editar</button><button class="danger" data-delete-product="${p.id}">Eliminar</button></div></td></tr>`).join("")}</tbody></table></div></div>
@@ -485,12 +485,19 @@ async function saveProductForm(form, submitButton) {
     submitButton.disabled = true;
     submitButton.textContent = id ? "Actualizando..." : "Guardando...";
   }
-  if (id) await api(`/products/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
-  else await api("/products", { method: "POST", body: JSON.stringify(payload) });
-  state.productEditingId = "";
-  form.reset();
-  await loadAll();
-  toast(id ? "Producto actualizado." : "Producto agregado.");
+  try {
+    if (id) await api(`/products/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+    else await api("/products", { method: "POST", body: JSON.stringify(payload) });
+    state.productEditingId = "";
+    form.reset();
+    await loadAll();
+    toast(id ? "Producto actualizado." : "Producto agregado.");
+  } finally {
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = state.productEditingId ? "Actualizar producto" : "Guardar producto";
+    }
+  }
 }
 
 function exportTable(filename, rows) {
@@ -772,7 +779,8 @@ document.addEventListener("click", async (event) => {
     if (saveProduct) {
       const form = saveProduct.closest("#productForm");
       if (!form) return;
-      await saveProductForm(form, saveProduct);
+      if (typeof form.requestSubmit === "function") form.requestSubmit();
+      else await saveProductForm(form, saveProduct);
       return;
     }
     const viewButton = event.target.closest("[data-view]");
