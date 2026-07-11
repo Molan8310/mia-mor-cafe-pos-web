@@ -411,7 +411,7 @@ function productsView() {
         <label class="field">Fecha de caducidad<input name="expirationDate" type="date" value="${editing?.expirationDate || ""}" /></label>
         <label class="field field-span-2">Ruta o URL de imagen<input name="imageUrl" placeholder="assets/products/mi-producto.jpg" value="${escapeHtml(editing?.imageUrl || "")}" /></label>
         <label class="field field-span-2">Imagen del producto<input name="imageFile" type="file" accept="image/*" /></label>
-        <button class="primary" type="submit" data-save-product>${editing ? "Actualizar producto" : "Guardar producto"}</button>
+        <button class="primary" type="button" data-save-product>${editing ? "Actualizar producto" : "Guardar producto"}</button>
       </form>
     </div>
     <div class="panel" style="margin-top:16px"><div class="table-wrap"><table><thead><tr><th>Producto</th><th>Categoria</th><th>Precio</th><th>Stock</th><th>Vendidos</th><th>Elaboracion</th><th>Caducidad</th><th>Acciones</th></tr></thead><tbody>${state.products.map((p) => `<tr><td><div class="product-cell"><img src="${productImage(p)}" alt="" /><span>${p.name}</span></div></td><td>${p.category || "-"}</td><td>${money.format(p.price)}</td><td>${p.stock}</td><td>${p.sold || 0}</td><td>${p.productionDate || "-"}</td><td>${p.expirationDate || "-"}</td><td><div class="actions"><button class="ghost" data-edit-product="${p.id}">Editar</button><button class="danger" data-delete-product="${p.id}">Eliminar</button></div></td></tr>`).join("")}</tbody></table></div></div>
@@ -778,6 +778,13 @@ document.addEventListener("change", (event) => {
 
 document.addEventListener("click", async (event) => {
   try {
+    const saveProductButton = event.target.closest("[data-save-product]");
+    if (saveProductButton) {
+      const form = saveProductButton.closest("#productForm");
+      if (!form) return;
+      await saveProductForm(form, saveProductButton);
+      return;
+    }
     const viewButton = event.target.closest("[data-view]");
     if (viewButton) {
       state.view = viewButton.dataset.view;
