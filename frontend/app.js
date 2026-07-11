@@ -101,6 +101,22 @@ function saveSession() {
   localStorage.setItem("mia_saas_view", state.view);
 }
 
+function bindProductFormActions(root = document) {
+  const form = root.querySelector("#productForm");
+  const button = form?.querySelector("[data-save-product]");
+  if (!form || !button || button.dataset.bound === "true") return;
+  button.dataset.bound = "true";
+  button.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await saveProductForm(form, button);
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+}
+
 function render() {
   if (!state.token) return renderLogin();
   if (isPlatform() && !state.view.startsWith("platform")) state.view = "platformDashboard";
@@ -131,6 +147,7 @@ function render() {
       </section>
     </main>
   `;
+  bindProductFormActions(app);
 }
 
 function renderLogin() {
