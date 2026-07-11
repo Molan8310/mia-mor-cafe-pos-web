@@ -399,17 +399,18 @@ function productsView() {
       <div class="panel-head"><h3>${editing ? "Editar producto" : "Nuevo producto"}</h3><div class="actions"><button class="ghost" data-export-products>Exportar inventario</button>${editing ? `<button class="ghost" data-cancel-product-edit>Cancelar edicion</button>` : ""}</div></div>
       <form id="productForm" class="product-form">
         <input type="hidden" name="id" value="${editing?.id || ""}" />
-        <input name="name" placeholder="Producto" value="${escapeHtml(editing?.name || "")}" required />
-        <input name="category" placeholder="Categoria" value="${escapeHtml(editing?.category || "")}" />
-        <input name="description" placeholder="Descripcion" value="${escapeHtml(editing?.description || "")}" />
-        <input name="price" type="number" min="0" step="0.01" placeholder="Precio" value="${editing?.price ?? ""}" />
-        <input name="cost" type="number" min="0" step="0.01" placeholder="Costo" value="${editing?.cost ?? ""}" />
-        <input name="stock" type="number" min="0" step="1" placeholder="Stock" value="${editing?.stock ?? 0}" />
-        <input name="minStock" type="number" min="0" step="1" placeholder="Stock minimo" value="${editing?.minStock ?? 0}" />
+        <label class="field">Producto<input name="name" placeholder="Nombre del producto" value="${escapeHtml(editing?.name || "")}" required /></label>
+        <label class="field">Categoria<input name="category" placeholder="Categoria" value="${escapeHtml(editing?.category || "")}" /></label>
+        <label class="field field-span-2">Descripcion<input name="description" placeholder="Descripcion del producto" value="${escapeHtml(editing?.description || "")}" /></label>
+        <label class="field">Precio<input name="price" type="number" min="0" step="0.01" placeholder="0.00" value="${editing?.price ?? ""}" /></label>
+        <label class="field">Costo<input name="cost" type="number" min="0" step="0.01" placeholder="0.00" value="${editing?.cost ?? ""}" /></label>
+        <label class="field">Stock actual<input name="stock" type="number" min="0" step="1" placeholder="0" value="${editing?.stock ?? 0}" /></label>
+        <label class="field">Stock minimo<input name="minStock" type="number" min="0" step="1" placeholder="0" value="${editing?.minStock ?? 0}" /></label>
+        <label class="field">Vendidos<input name="sold" type="number" min="0" step="1" placeholder="0" value="${editing?.sold ?? 0}" /></label>
         <label class="field">Fecha de elaboracion<input name="productionDate" type="date" value="${editing?.productionDate || ""}" /></label>
         <label class="field">Fecha de caducidad<input name="expirationDate" type="date" value="${editing?.expirationDate || ""}" /></label>
-        <input name="imageUrl" placeholder="Ruta/URL de imagen" value="${escapeHtml(editing?.imageUrl || "")}" />
-        <label class="field">Imagen del producto<input name="imageFile" type="file" accept="image/*" /></label>
+        <label class="field field-span-2">Ruta o URL de imagen<input name="imageUrl" placeholder="assets/products/mi-producto.jpg" value="${escapeHtml(editing?.imageUrl || "")}" /></label>
+        <label class="field field-span-2">Imagen del producto<input name="imageFile" type="file" accept="image/*" /></label>
         <button class="primary" type="submit" data-save-product>${editing ? "Actualizar producto" : "Guardar producto"}</button>
       </form>
     </div>
@@ -478,9 +479,11 @@ async function saveProductForm(form, submitButton) {
     price: Number(body.price || 0),
     cost: Number(body.cost || 0),
     stock: Number(body.stock || 0),
-    minStock: Number(body.minStock || 0)
+    minStock: Number(body.minStock || 0),
+    sold: Number(body.sold || 0)
   };
   if (!payload.name?.trim()) throw new Error("Captura el nombre del producto.");
+  const buttonLabel = id ? "Actualizar producto" : "Guardar producto";
   if (submitButton) {
     submitButton.disabled = true;
     submitButton.textContent = id ? "Actualizando..." : "Guardando...";
@@ -495,7 +498,7 @@ async function saveProductForm(form, submitButton) {
   } finally {
     if (submitButton) {
       submitButton.disabled = false;
-      submitButton.textContent = state.productEditingId ? "Actualizar producto" : "Guardar producto";
+      submitButton.textContent = buttonLabel;
     }
   }
 }
@@ -775,14 +778,6 @@ document.addEventListener("change", (event) => {
 
 document.addEventListener("click", async (event) => {
   try {
-    const saveProduct = event.target.closest("[data-save-product]");
-    if (saveProduct) {
-      const form = saveProduct.closest("#productForm");
-      if (!form) return;
-      if (typeof form.requestSubmit === "function") form.requestSubmit();
-      else await saveProductForm(form, saveProduct);
-      return;
-    }
     const viewButton = event.target.closest("[data-view]");
     if (viewButton) {
       state.view = viewButton.dataset.view;

@@ -188,6 +188,7 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
 .pager { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 14px; color: var(--muted); }
 .product-form { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 10px; align-items: end; }
 .product-form .field { margin: 0; }
+.product-form .field-span-2 { grid-column: span 2; }
 .product-form button { grid-column: 1 / -1; }
 .product-cell { display: flex; gap: 10px; align-items: center; min-width: 220px; }
 .product-cell img { width: 46px; height: 46px; object-fit: cover; border: 1px solid var(--line); background: white; }
@@ -221,5 +222,6 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
   .client-form { grid-template-columns: 1fr; }
   .grid-form { grid-template-columns: 1fr; }
   .product-form { grid-template-columns: 1fr; }
+  .product-form .field-span-2 { grid-column: span 1; }
   .cart { position: static; }
 }
